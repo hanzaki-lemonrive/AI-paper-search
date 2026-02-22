@@ -42,7 +42,7 @@ except ImportError as e:
 class PaperSearch:
     """Minimal paper search for AI agents"""
 
-    def __init__(self, query, output_dir=None, limit=10, limit_per_database=None, enable_pdf_download=True):
+    def __init__(self, query, output_dir=None, limit=10, limit_per_database=None, enable_pdf_download=True, export_unavailable=True):
         """
         Initialize search
 
@@ -52,11 +52,13 @@ class PaperSearch:
             limit: Total paper limit
             limit_per_database: Per-database limit (enables multi-db search)
             enable_pdf_download: Whether to download PDFs
+            export_unavailable: Whether to export unavailable papers list
         """
         self.query = query.strip()
         self.limit = limit
         self.limit_per_database = limit_per_database
         self.enable_pdf_download = enable_pdf_download
+        self.export_unavailable = export_unavailable
         self.results = None
 
         # Setup output directory
@@ -70,6 +72,7 @@ class PaperSearch:
         self.json_file = self.output_dir / "results.json"
         self.pdf_dir = self.output_dir / "pdfs"
         self.pdf_dir.mkdir(exist_ok=True)
+        self.unavailable_file = self.output_dir / "unavailable_papers.md"
 
     def search(self):
         """Search papers using findpapers"""
@@ -120,8 +123,97 @@ class PaperSearch:
                     except Exception:
                         paper['pdf_downloaded'] = False
                     break
+            else:
+                # No arXiv URL found, mark as not downloaded
+                paper['pdf_downloaded'] = False
 
         return downloaded
+
+    def _export_unavailable_papers(self):
+        """Export list of papers that couldn't be downloaded"""
+        if not self.results or 'papers' not in self.results:
+            return 0
+
+        papers = self.results.get('papers', [])
+        unavailable = [p for p in papers if not p.get('pdf_downloaded', False)]
+
+        if not unavailable:
+            return 0
+
+        # Create markdown file
+        content = f"# 无法下载的论文列表\n\n"
+        content += f"**查询：** {self.query}\n"
+        content += f"**生成时间：** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+        content += f"**总计：** {len(papers)} 篇\n"
+        content += f"**已下载：** {len(papers) - len(unavailable)} 篇\n"
+        content += f"**无法下载：** {len(unavailable)} 篇\n\n"
+        content += "---\n\n"
+
+        for idx, paper in enumerate(unavailable, 1):
+            content += f"## {idx}. {paper.get('title', 'N/A')}\n\n"
+
+            # Basic info
+            content += f"- **年份：** {paper.get('publication_date', '')[:4] if paper.get('publication_date') else 'N/A'}\n"
+            content += f"- **数据库：** {', '.join(paper.get('databases', ['N/A']))}\n"
+
+            # Authors
+            authors = paper.get('authors', [])
+            if authors:
+                content += f"- **作者：** {', '.join(authors[:10])}" + ("..." if len(authors) > 10 else "") + "\n"
+
+            # Keywords
+            keywords = paper.get('keywords', [])
+            if keywords:
+                content += f"- **关键词：** {', '.join(keywords[:15])}" + ("..." if len(keywords) > 15 else "") + "\n"
+
+            # Impact factor (期刊信息)
+            publication = paper.get('publication', {})
+            if publication:
+                content += f"- **期刊/会议：** {publication.get('title', 'N/A')}\n"
+                content += f"- **类型：** {publication.get('category', 'N/A')}\n"
+
+            # URLs
+            urls = paper.get('urls', [])
+            if urls:
+                content += f"- **链接：**\n"
+                for url in urls[:5]:  # Limit to 5 URLs
+                    content += f"  - {url}\n"
+                if len(urls) > 5:
+                    content += f"  - ... (共 {len(urls)} 个链接)\n"
+
+            # Abstract/Summary
+            abstract = paper.get('abstract', '')
+            if abstract:
+                # Limit abstract length
+                if len(abstract) > 800:
+                    abstract = abstract[:800] + "..."
+                content += f"\n**摘要：**\n{abstract}\n"
+
+            # DOI
+            doi = paper.get('doi', '')
+            if doi:
+                content += f"\n- **DOI：** {doi}\n"
+
+            content += "\n---\n\n"
+
+        # Add summary at the end
+        content += "\n## 说明\n\n"
+        content += "以下数据库的论文通常需要机构订阅才能下载全文：\n"
+        content += "- PubMed: 生物医学文献数据库\n"
+        content += "- medRxiv: 医学预印本\n"
+        content += "- ACM Digital Library: 计算机科学文献\n"
+        content += "- IEEE: 工程技术文献\n"
+        content += "- Scopus: 多学科文献数据库\n\n"
+        content += "建议：\n"
+        content += "1. 联系所在图书馆获取访问权限\n"
+        content += "2. 使用 Sci-Hub 等开放获取资源\n"
+        content += "3. 直接联系作者索取全文\n"
+
+        # Write to file
+        with open(self.unavailable_file, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        return len(unavailable)
 
     def get_result(self):
         """Get formatted result for agent consumption"""
@@ -165,6 +257,11 @@ class PaperSearch:
         if success and self.enable_pdf_download:
             self._download_pdfs()
 
+        if self.export_unavailable:
+            unavailable_count = self._export_unavailable_papers()
+            if unavailable_count > 0:
+                print(f"Exported {unavailable_count} unavailable papers to: {self.unavailable_file}")
+
         return self.get_result()
 
 
@@ -180,6 +277,7 @@ def main():
     parser.add_argument('-l', '--limit', type=int, default=10, help='Total paper limit (default: 10)')
     parser.add_argument('--limit-per-db', type=int, help='Per-database limit (enables multi-db search)')
     parser.add_argument('--no-pdf', action='store_true', help='Skip PDF download')
+    parser.add_argument('--no-export-unavailable', action='store_true', help='Skip exporting unavailable papers list')
     parser.add_argument('--json', action='store_true', help='Output JSON to stdout')
 
     args = parser.parse_args()
@@ -190,7 +288,8 @@ def main():
         output_dir=args.output,
         limit=args.limit,
         limit_per_database=getattr(args, 'limit_per_db', None),
-        enable_pdf_download=not args.no_pdf
+        enable_pdf_download=not args.no_pdf,
+        export_unavailable=not args.no_export_unavailable
     )
 
     result = searcher.run()

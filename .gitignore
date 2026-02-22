@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Sensitive Data (IMPORTANT!)
+config/.env
+*.env
+.env.local
+.env.*.local
+
+# Session and Memory
+.session_memory.md
+*.log
+
+# Project Specific
+papers/
+test_*/
+temp_wheels/
+*.tar.gz
+nul
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/

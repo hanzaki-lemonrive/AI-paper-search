@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(where:*)",
+      "Bash(D:/projects/paper-search/venv/Scripts/python:*)",
+      "Bash(dir \"C:\\\\Program Files \\(x86\\)\\\\Microsoft Visual Studio\")",
+      "Bash(dir:*)",
+      "Bash(D:/projects/paper-search/venv/Scripts/pip show:*)",
+      "Bash(D:/projects/paper-search/venv/Scripts/pip list:*)",
+      "Bash(D:/projects/paper-search/venv/Scripts/pip:*)",
+      "Bash(EDLIB_USE_CYTHON=1 D:/projects/paper-search/venv/Scripts/python:*)",
+      "Bash(\"/c/Program Files \\(x86\\)/Microsoft Visual Studio/Installer/vswhere.exe\":*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(cmd.exe:*)",
+      "Bash(find:*)",
+      "Bash(venv/Scripts/python:*)",
+      "Bash(venv/Scripts/pip show:*)",
+      "Bash(curl:*)",
+      "Bash(tasklist:*)",
+      "Bash(taskkill:*)",
+      "Bash(wmic process where \"name='python.exe'\" delete:*)",
+      "Bash(powershell -Command \"echo $env:APPDATA\")",
+      "Bash(./venv/Scripts/python.exe:*)",
+      "Bash(du:*)"
+    ]
+  }
+}

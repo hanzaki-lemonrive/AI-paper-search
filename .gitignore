@@ -26,6 +26,10 @@ config/.env
 .env.local
 .env.*.local
 
+# Sensitive batch files with credentials
+# setup_env.bat and send_test_report.bat are now safe (use env vars)
+# But keep this pattern for future reference
+
 # Session and Memory
 .session_memory.md
 *.log

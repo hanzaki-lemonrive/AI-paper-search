@@ -23,7 +23,11 @@
       "Bash(wmic process where \"name='python.exe'\" delete:*)",
       "Bash(powershell -Command \"echo $env:APPDATA\")",
       "Bash(./venv/Scripts/python.exe:*)",
-      "Bash(du:*)"
+      "Bash(du:*)",
+      "Bash(venvScriptspython:*)",
+      "Read(//d/**)",
+      "Bash(venvScriptspython.exe:*)",
+      "Bash(git add:*)"
     ]
   }
 }

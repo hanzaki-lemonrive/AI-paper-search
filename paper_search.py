@@ -38,11 +38,22 @@ except ImportError as e:
     }, ensure_ascii=False))
     sys.exit(1)
 
+# Import new PubMed modules
+try:
+    from script.pubmed_searcher import PubMedSearcher
+    from script.pdf_downloader import PDFDownloadManager
+    from script.impact_filter import ImpactFactorFilter
+    from config.config import get_config
+except ImportError as e:
+    print(f"Warning: PubMed modules not available: {e}")
+
 
 class PaperSearch:
     """Minimal paper search for AI agents"""
 
-    def __init__(self, query, output_dir=None, limit=10, limit_per_database=None, enable_pdf_download=True, export_unavailable=True):
+    def __init__(self, query, output_dir=None, limit=10, limit_per_database=None,
+                 enable_pdf_download=True, export_unavailable=True,
+                 pubmed_mode=False, min_sjr=None, free_only=False, date_range=None):
         """
         Initialize search
 
@@ -53,12 +64,20 @@ class PaperSearch:
             limit_per_database: Per-database limit (enables multi-db search)
             enable_pdf_download: Whether to download PDFs
             export_unavailable: Whether to export unavailable papers list
+            pubmed_mode: Use specialized PubMed searcher
+            min_sjr: Minimum SJR score for impact factor filtering
+            free_only: Only retrieve papers with free full text
+            date_range: Optional (start_year, end_year) tuple
         """
         self.query = query.strip()
         self.limit = limit
         self.limit_per_database = limit_per_database
         self.enable_pdf_download = enable_pdf_download
         self.export_unavailable = export_unavailable
+        self.pubmed_mode = pubmed_mode
+        self.min_sjr = min_sjr
+        self.free_only = free_only
+        self.date_range = date_range
         self.results = None
 
         # Setup output directory
@@ -74,18 +93,49 @@ class PaperSearch:
         self.pdf_dir.mkdir(exist_ok=True)
         self.unavailable_file = self.output_dir / "unavailable_papers.md"
 
-    def search(self):
-        """Search papers using findpapers"""
-        try:
-            findpapers_search(
-                query=self.query,
-                outputpath=str(self.json_file),
-                limit=self.limit,
-                limit_per_database=self.limit_per_database,
-            )
+        # Load configuration
+        self.config = get_config()
 
-            with open(self.json_file, 'r', encoding='utf-8') as f:
-                self.results = json.load(f)
+    def search(self):
+        """Search papers using findpapers or PubMed mode"""
+        try:
+            if self.pubmed_mode:
+                # Use specialized PubMed searcher
+                print("使用 PubMed 搜索模式...")
+
+                searcher = PubMedSearcher(
+                    email=self.config.ncbi_email,
+                    api_key=self.config.ncbi_api_key
+                )
+
+                papers = searcher.search(
+                    query=self.query,
+                    max_results=self.limit,
+                    date_range=self.date_range,
+                    has_free_full_text=self.free_only
+                )
+
+                self.results = {
+                    'papers': papers,
+                    'number_of_papers': len(papers),
+                    'number_of_papers_by_database': {'PubMed': len(papers)}
+                }
+
+                # Apply impact factor filtering if specified
+                if self.min_sjr is not None and self.min_sjr > 0:
+                    self._filter_by_impact_factor()
+
+            else:
+                # Use existing findpapers search
+                findpapers_search(
+                    query=self.query,
+                    outputpath=str(self.json_file),
+                    limit=self.limit,
+                    limit_per_database=self.limit_per_database,
+                )
+
+                with open(self.json_file, 'r', encoding='utf-8') as f:
+                    self.results = json.load(f)
 
             return True
 
@@ -96,36 +146,120 @@ class PaperSearch:
             }
             return False
 
+    def _filter_by_impact_factor(self):
+        """Filter papers by minimum SJR score"""
+        if not self.results or 'papers' not in self.results:
+            return
+
+        try:
+            filter_engine = ImpactFactorFilter()
+
+            # 检查数据库是否为空
+            import sqlite3
+            conn = sqlite3.connect(filter_engine.db_path)
+            cursor = conn.cursor()
+            cursor.execute('SELECT COUNT(*) FROM journals')
+            count = cursor.fetchone()[0]
+            conn.close()
+
+            if count == 0:
+                print("\n⚠ SJR 数据库为空，无法进行影响因子筛选")
+                print("\n💡 快速设置:")
+                print("  运行: python script/setup_sjr.py")
+                print("  或查看: PUBMED_GUIDE.md 中的 'SJR 数据设置' 章节")
+                print("\n继续搜索（不进行影响因子筛选）...\n")
+                return
+
+            papers = self.results.get('papers', [])
+
+            filtered = filter_engine.filter_papers_by_sjr(
+                papers=papers,
+                min_sjr=self.min_sjr
+            )
+
+            self.results['papers'] = filtered
+            self.results['number_of_papers'] = len(filtered)
+
+            # Print summary
+            summary = filter_engine.get_sjr_summary(filtered)
+            if summary['count'] > 0:
+                print(f"\n✓ SJR 筛选完成 (最小: {self.min_sjr}):")
+                print(f"  平均: {summary['mean']:.2f}")
+                print(f"  中位数: {summary['median']:.2f}")
+                print(f"  最高: {summary['max']:.2f}")
+                print(f"  最低: {summary['min']:.2f}")
+
+        except Exception as e:
+            print(f"\n⚠ 影响因子过滤失败: {e}")
+            print(f"  提示: 运行 python script/setup_sjr.py 设置 SJR 数据")
+
     def _download_pdfs(self):
-        """Download PDFs for arXiv papers"""
+        """Download PDFs for arXiv and PubMed papers"""
         if not self.results or 'papers' not in self.results:
             return 0
 
         papers = self.results.get('papers', [])
         downloaded = 0
 
-        for paper in papers:
-            # Try arXiv URLs
-            for url in paper.get('urls', []):
-                if 'arxiv.org' in url:
-                    arxiv_id = url.split('/')[-1]
-                    try:
-                        search = arxiv.Search(id_list=[arxiv_id])
-                        for result in search.results():
-                            pdf_path = self.pdf_dir / f"{arxiv_id}.pdf"
-                            result.download_pdf(filename=str(pdf_path))
+        # Check if using PubMed mode
+        if self.pubmed_mode:
+            # Use enhanced PDF downloader
+            print("\n下载 PDFs...")
+            downloader = PDFDownloadManager(output_dir=self.pdf_dir)
 
-                            # Add PDF path to paper data
-                            paper['pdf_path'] = str(pdf_path)
-                            paper['pdf_downloaded'] = True
-                            downloaded += 1
-                            break
-                    except Exception:
-                        paper['pdf_downloaded'] = False
-                    break
-            else:
-                # No arXiv URL found, mark as not downloaded
-                paper['pdf_downloaded'] = False
+            # Prepare institution credentials if configured
+            institution_credentials = None
+            if self.config.institutional_proxy:
+                institution_credentials = {
+                    'ezproxy_url': self.config.institutional_proxy,
+                    'username': self.config.institution_username,
+                    'password': self.config.institution_password
+                }
+
+            for idx, paper in enumerate(papers, 1):
+                print(f"  [{idx}/{len(papers)}] {paper.get('title', 'N/A')[:60]}...")
+
+                result = downloader.download_paper_pdf(
+                    paper=paper,
+                    pmid=paper.get('pmid', ''),
+                    doi=paper.get('doi', ''),
+                    institution_credentials=institution_credentials
+                )
+
+                if result['success']:
+                    paper['pdf_path'] = result['path']
+                    paper['pdf_downloaded'] = True
+                    paper['pdf_source'] = result['source']
+                    downloaded += 1
+                else:
+                    paper['pdf_downloaded'] = False
+                    paper['pdf_error'] = result.get('error', 'Unknown error')
+
+            print(f"\n✓ 下载完成: {downloaded}/{len(papers)} 篇")
+        else:
+            # Use existing arXiv download logic
+            for paper in papers:
+                # Try arXiv URLs
+                for url in paper.get('urls', []):
+                    if 'arxiv.org' in url:
+                        arxiv_id = url.split('/')[-1]
+                        try:
+                            search = arxiv.Search(id_list=[arxiv_id])
+                            for result in search.results():
+                                pdf_path = self.pdf_dir / f"{arxiv_id}.pdf"
+                                result.download_pdf(filename=str(pdf_path))
+
+                                # Add PDF path to paper data
+                                paper['pdf_path'] = str(pdf_path)
+                                paper['pdf_downloaded'] = True
+                                downloaded += 1
+                                break
+                        except Exception:
+                            paper['pdf_downloaded'] = False
+                        break
+                else:
+                    # No arXiv URL found, mark as not downloaded
+                    paper['pdf_downloaded'] = False
 
         return downloaded
 
@@ -280,7 +414,25 @@ def main():
     parser.add_argument('--no-export-unavailable', action='store_true', help='Skip exporting unavailable papers list')
     parser.add_argument('--json', action='store_true', help='Output JSON to stdout')
 
+    # PubMed mode options
+    parser.add_argument('--pubmed-mode', action='store_true',
+                       help='Use specialized PubMed searcher with enhanced features')
+    parser.add_argument('--min-sjr', type=float,
+                       help='Minimum SJR score for impact factor filtering (e.g., 1.5)')
+    parser.add_argument('--free-only', action='store_true',
+                       help='Only retrieve papers with free full text available')
+    parser.add_argument('--date-range', nargs=2, type=int, metavar=('START', 'END'),
+                       help='Filter by publication year range (e.g., --date-range 2020 2024)')
+
     args = parser.parse_args()
+
+    # Validate date range
+    date_range = None
+    if hasattr(args, 'date_range') and args.date_range:
+        if args.date_range[0] > args.date_range[1]:
+            print("Error: Start year must be less than or equal to end year")
+            sys.exit(1)
+        date_range = tuple(args.date_range)
 
     # Run search
     searcher = PaperSearch(
@@ -289,7 +441,11 @@ def main():
         limit=args.limit,
         limit_per_database=getattr(args, 'limit_per_db', None),
         enable_pdf_download=not args.no_pdf,
-        export_unavailable=not args.no_export_unavailable
+        export_unavailable=not args.no_export_unavailable,
+        pubmed_mode=getattr(args, 'pubmed_mode', False),
+        min_sjr=getattr(args, 'min_sjr', None),
+        free_only=getattr(args, 'free_only', False),
+        date_range=date_range
     )
 
     result = searcher.run()

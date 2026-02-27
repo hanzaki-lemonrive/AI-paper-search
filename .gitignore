@@ -36,6 +36,8 @@ config/.env
 
 # Project Specific
 papers/
+queries/*.txt
+cache/
 test_*/
 temp_wheels/
 *.tar.gz
